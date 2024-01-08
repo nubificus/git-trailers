@@ -1,0 +1,167 @@
+# action.yml
+
+name: git-trailers
+description: "Action that adds Reviewed-by/Approved-by and PR trailers in git commits of a PR"
+
+runs:
+    using: 'composite'
+    steps:
+#    - name: Debug github events
+#      id: tmp
+#      shell: bash
+#      run: |
+#        echo "github.head_ref:" ${{ github.head_ref}}
+#        echo "github.ref:" ${{ github.ref }}
+#        echo "github.ref_name:" ${{ github.ref_name }}
+#        echo "github.event.number:" ${{ github.event.number }}
+#        echo "github.event.pull_request.base.ref:" ${{ github.event.pull_request.base.ref }}
+#        echo "github.event.pull_request.head.ref:" ${{ github.event.pull_request.head.ref }}
+#        echo "github.event.pull_request.number:" ${{ github.event.pull_request.number }}
+
+    - name: get repo branches
+      id: repo-branches
+      shell: bash
+      run: |
+        repo_branches=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/branches' \
+        --header 'Accept: application/vnd.github+json' \
+        --header 'Authorization: Bearer ${{ github.token }}' \
+        --header 'X-GitHub-Api-Version: 2022-11-28')
+        echo "repo_branches: $(echo $repo_branches)"
+        repo_master=$(echo $repo_branches| jq -re '.[].name|select(.=="master")' || true)
+        target_branch=$([[ `echo $repo_master` == "master" ]] && echo master || echo main)
+        echo "target_branch=$target_branch" >> $GITHUB_ENV 
+        echo "target_branch: " $target_branch
+
+    - name: Get patches
+      run: |
+        pr_patches=$(git format-patch origin/${{env.target_branch}}) 
+        {
+        echo 'PR_PATCHES_GHENV<<EOF'
+        echo $pr_patches
+        echo EOF
+        } >> "$GITHUB_ENV"
+        git reset --hard origin/${{env.target_branch}} && \
+        git config trailer.sign.key "Signed-off-by" && git config trailer.review.key "Reviewed-by" && git config trailer.approve.key "Approved-by" && git config trailer.pr.key "PR"
+      shell: bash
+
+    - name: get PR info
+      id: PR-info
+      shell: bash
+      run: |
+         pr_info=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}' \
+         --header 'Accept: application/vnd.github+json' \
+         --header 'Authorization: Bearer ${{ github.token }}' \
+         --header 'X-GitHub-Api-Version: 2022-11-28')
+         pr_user=$(echo $pr_info | jq -e .user.login | sed 's/\"//g')
+         echo "pr_user=$pr_user" >> $GITHUB_ENV
+         echo "pull request user: " $pr_user
+
+         pr_comments=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/comments' \
+         --header 'Accept: application/vnd.github+json' \
+         --header 'Authorization: Bearer ${{ github.token }}' \
+         --header 'X-GitHub-Api-Version: 2022-11-28')
+         echo $pr_comments
+         pr_commits_full=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits' \
+         --header 'Accept: application/vnd.github+json' \
+         --header 'Authorization: Bearer ${{ github.token }}' \
+         --header 'X-GitHub-Api-Version: 2022-11-28')
+         pr_commits=$(echo $pr_commits_full | jq -re '.[].sha')
+         {
+         echo 'PR_COMMITS_GHENV<<EOF'
+         echo $pr_commits
+         echo EOF
+         } >> "$GITHUB_ENV"
+         echo $PR_COMMITS_GHENV
+
+         pr_requested_reviewers=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/requested_reviewers' \
+         --header 'Accept: application/vnd.github+json' \
+         --header 'Authorization: Bearer ${{ github.token }}' \
+         --header 'X-GitHub-Api-Version: 2022-11-28')
+         echo $pr_requested_reviewers
+         pr_reviews=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews' \
+         --header 'Accept: application/vnd.github+json' \
+         --header 'Authorization: Bearer ${{ github.token }}' \
+         --header 'X-GitHub-Api-Version: 2022-11-28')
+         pr_others=$(echo $pr_reviews | jq 'map(.user.login) | unique' |sed 's/\[//g' | sed 's/\]//g' | sed 's/\,//g' | sed 's/\"//g')
+         echo "pull reviewers: " $pr_others
+         {
+         echo 'PR_REVIEWERS_GHENV<<EOF'
+         echo $pr_others
+         echo EOF
+         } >> "$GITHUB_ENV"
+         echo $PR_REVIEWERS_GHENV
+         pr_reviews=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews' \
+         --header 'Accept: application/vnd.github+json' \
+         --header 'Authorization: Bearer ${{ github.token }}' \
+         --header 'X-GitHub-Api-Version: 2022-11-28')
+         pr_approver=$(echo $pr_reviews | jq  -rce 'map(select(.state == "APPROVED"))' | jq 'map(.user.login) | unique' |sed 's/\[//g' | sed 's/\]//g' | sed 's/\,//g' | sed 's/\"//g')
+         echo "pull request approver: " $pr_approver
+         {
+         echo 'PR_APPROVER_GHENV<<EOF'
+         echo $pr_approver
+         echo EOF
+         } >> "$GITHUB_ENV"
+         echo $PR_APPROVER_GHENV
+              
+    - name: add REVIEWER trailers
+      shell: bash
+      id: reviewer-trailers
+      run: |
+        for pr_patch in `echo $PR_PATCHES_GHENV`; do \
+          echo "trail pr for patch number: " $pr_patch 
+          for i in `echo $PR_REVIEWERS_GHENV`; do \
+            echo "reviewers item: " $i
+            gh_user=$(curl --location https://api.github.com/users/$i \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'Authorization: Bearer ${{ github.token }}' \
+            --header 'X-GitHub-Api-Version: 2022-11-28')
+            gh_user_name=$(echo $gh_user | jq '.name')
+            gh_user_email=$(echo $gh_user | jq '.email')
+            git interpret-trailers --trailer "review: $gh_user_name $gh_user_email" --in-place $pr_patch
+          done
+        done        
+
+    - name: add APPROVERS trailers
+      shell: bash
+      id: approvers-trailers
+      run: |
+        for pr_patch in `echo $PR_PATCHES_GHENV`; do \
+          echo "trail pr for patch number: " $pr_patch 
+          for i in `echo $PR_APPROVER_GHENV`; do \
+            echo "approver item: " $i
+            gh_user=$(curl --location https://api.github.com/users/$i \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'Authorization: Bearer ${{ github.token }}' \
+            --header 'X-GitHub-Api-Version: 2022-11-28')
+            gh_user_name=$(echo $gh_user | jq '.name')
+            gh_user_email=$(echo $gh_user | jq '.email')
+            git interpret-trailers --trailer "approve: $gh_user_name $gh_user_email" --in-place $pr_patch
+          done
+          git interpret-trailers --trailer 'PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}' --in-place $pr_patch
+        done    
+
+    - name: update remote branch with trailer info
+      shell: bash
+      id: remote-branch-update
+      run: |
+        git branch -D ${{ github.event.pull_request.head.ref }} || true
+        git branch ${{ github.event.pull_request.head.ref }}
+        git checkout ${{ github.event.pull_request.head.ref }}
+        git status
+        echo "Setting up user"
+        gh_user=$(curl --location https://api.github.com/users/$pr_user \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'Authorization: Bearer ${{ github.token }}' \
+            --header 'X-GitHub-Api-Version: 2022-11-28')
+        gh_user_name=$(echo $gh_user | jq '.name')
+        gh_user_email=$(echo $gh_user | jq '.email')
+        git config user.email $gh_user_name
+        git config user.name $gh_user_email
+        echo "applying patches..."
+        for pr_patch in `echo $PR_PATCHES_GHENV`; do \
+          echo "apply for patch number: " $pr_patch && \
+          git am $pr_patch
+        done
+        echo "push to origin/branch..." ${{ github.event.pull_request.head.ref }}
+        git push -f origin ${{ github.event.pull_request.head.ref }}
+
