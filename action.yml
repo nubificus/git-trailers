@@ -3,6 +3,12 @@
 name: git-trailers
 description: "Action that adds Reviewed-by/Approved-by and PR trailers in git commits of a PR"
 
+inputs:
+  user_info: 
+    description: "Filepath to info about users (github username, name, email)"
+    required: false
+
+
 runs:
     using: 'composite'
     steps:
@@ -17,6 +23,25 @@ runs:
 #        echo "github.event.pull_request.base.ref:" ${{ github.event.pull_request.base.ref }}
 #        echo "github.event.pull_request.head.ref:" ${{ github.event.pull_request.head.ref }}
 #        echo "github.event.pull_request.number:" ${{ github.event.pull_request.number }}
+
+    - name: 'Parse inputs'
+      shell: bash
+      if: github.event.inputs.user_info != ''
+      run: |
+        echo "USERINFO=${{ inputs.user_info }}" >> $GITHUB_ENV
+        
+
+    - name: 'Set default path'
+      shell: bash
+      if: github.event.inputs.user_info == ''
+      run: |
+        echo "USERINFO=${{ github.action_path }}/resources/users_info.yml" >> $GITHUB_ENV
+        
+
+    - name: 'Setup yq'
+      uses: dcarbone/install-yq-action@v1.1.1
+      with:
+        version: v4.40.5
 
     - name: get repo branches
       id: repo-branches
@@ -110,14 +135,19 @@ runs:
         for pr_patch in `echo $PR_PATCHES_GHENV`; do \
           echo "trail pr for patch number: " $pr_patch 
           for i in `echo $PR_REVIEWERS_GHENV`; do \
-            echo "reviewers item: " $i
-            gh_user=$(curl --location https://api.github.com/users/$i \
-            --header 'Accept: application/vnd.github+json' \
-            --header 'Authorization: Bearer ${{ github.token }}' \
-            --header 'X-GitHub-Api-Version: 2022-11-28')
-            gh_user_name=$(echo $gh_user | jq '.name')
-            gh_user_email=$(echo $gh_user | jq '.email')
-            git interpret-trailers --trailer "review: $gh_user_name $gh_user_email" --in-place $pr_patch
+            echo "reviewers item:  $i"
+            gh_user=$(yq .users.$i  ${{ env.USERINFO }} )
+            echo "user: $gh_user"
+            if ! [[ $gh_user == "null" ]]; then
+              gh_user_name=$(yq .users.$i.name  ${{ github.action_path }}/resources/users_info.yml)
+              gh_user_email=$(yq .users.$i.email  ${{ github.action_path }}/resources/users_info.yml)
+              echo "user: $gh_user_name"
+              echo "email: $gh_user_email"
+              git interpret-trailers --trailer "review: $gh_user_name <$gh_user_email>" --in-place $pr_patch
+            else
+              echo "user not found in users info resource file... exiting... "
+              exit 1
+            fi
           done
         done        
 
@@ -129,13 +159,17 @@ runs:
           echo "trail pr for patch number: " $pr_patch 
           for i in `echo $PR_APPROVER_GHENV`; do \
             echo "approver item: " $i
-            gh_user=$(curl --location https://api.github.com/users/$i \
-            --header 'Accept: application/vnd.github+json' \
-            --header 'Authorization: Bearer ${{ github.token }}' \
-            --header 'X-GitHub-Api-Version: 2022-11-28')
-            gh_user_name=$(echo $gh_user | jq '.name')
-            gh_user_email=$(echo $gh_user | jq '.email')
-            git interpret-trailers --trailer "approve: $gh_user_name $gh_user_email" --in-place $pr_patch
+            gh_user=$(yq .users.$i  ${{ github.action_path }}/resources/users_info.yml)
+            if ! [[ $gh_user == "null" ]]; then
+              gh_user_name=$(yq .users.$i.name  ${{ github.action_path }}/resources/users_info.yml)
+              gh_user_email=$(yq .users.$i.email  ${{ github.action_path }}/resources/users_info.yml)
+              echo "user: $gh_user_name"
+              echo "email: $gh_user_email"
+              git interpret-trailers --trailer "approve: $gh_user_name <$gh_user_email>" --in-place $pr_patch
+            else
+              echo "user not found in users info resource file... exiting... "
+              exit 1
+            fi
           done
           git interpret-trailers --trailer 'PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}' --in-place $pr_patch
         done    
@@ -149,12 +183,17 @@ runs:
         git checkout ${{ github.event.pull_request.head.ref }}
         git status
         echo "Setting up user"
-        gh_user=$(curl --location https://api.github.com/users/$pr_user \
-            --header 'Accept: application/vnd.github+json' \
-            --header 'Authorization: Bearer ${{ github.token }}' \
-            --header 'X-GitHub-Api-Version: 2022-11-28')
-        gh_user_name=$(echo $gh_user | jq '.name')
-        gh_user_email=$(echo $gh_user | jq '.email')
+        gh_user=$(yq .users.$pr_user  ${{ github.action_path }}/resources/users_info.yml)
+        if ! [[ $gh_user == "null" ]]; then
+          gh_user_name=$(yq .users.$pr_user.name  ${{ github.action_path }}/resources/users_info.yml)
+          gh_user_email=$(yq .users.$pr_user.email  ${{ github.action_path }}/resources/users_info.yml)
+          echo "user: $gh_user_name"
+          echo "email: $gh_user_email"
+          #git interpret-trailers --trailer "approve: $gh_user_name $gh_user_email" --in-place $pr_patch
+        else
+          echo "user not found in users info resource file... exiting... "
+          exit 1
+        fi       
         git config user.email $gh_user_name
         git config user.name $gh_user_email
         echo "applying patches..."
