@@ -26,16 +26,16 @@ runs:
 
     - name: 'Parse inputs'
       shell: bash
-      if: github.event.inputs.user_info != ''
+      if: inputs.user_info != ''
       run: |
-        echo "USERINFO=${{ inputs.user_info }}" >> $GITHUB_ENV
+        echo "USERINFO=$(cat ${{ inputs.user_info }} | base64 -w 0)" >> $GITHUB_ENV
         
 
     - name: 'Set default path'
       shell: bash
-      if: github.event.inputs.user_info == ''
+      if: inputs.user_info == ''
       run: |
-        echo "USERINFO=${{ github.action_path }}/resources/users_info.yml" >> $GITHUB_ENV
+        echo "USERINFO=$(cat ${{ github.action_path }}/resources/users_info.yml | base64 -w 0)" >> $GITHUB_ENV
         
 
     - name: 'Setup yq'
@@ -136,13 +136,11 @@ runs:
           echo "trail pr for patch number: " $pr_patch 
           for i in `echo $PR_REVIEWERS_GHENV`; do \
             echo "reviewers item:  $i"
-            gh_user=$(yq .users.$i  ${{ env.USERINFO }} )
+            gh_user=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i - )
             echo "user: $gh_user"
             if ! [[ $gh_user == "null" ]]; then
-              gh_user_name=$(yq .users.$i.name  ${{ github.action_path }}/resources/users_info.yml)
-              gh_user_email=$(yq .users.$i.email  ${{ github.action_path }}/resources/users_info.yml)
-              echo "user: $gh_user_name"
-              echo "email: $gh_user_email"
+              gh_user_name=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i.name - )
+              gh_user_email=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i.email - )
               git interpret-trailers --trailer "review: $gh_user_name <$gh_user_email>" --in-place $pr_patch
             else
               echo "user not found in users info resource file... exiting... "
@@ -159,12 +157,10 @@ runs:
           echo "trail pr for patch number: " $pr_patch 
           for i in `echo $PR_APPROVER_GHENV`; do \
             echo "approver item: " $i
-            gh_user=$(yq .users.$i  ${{ github.action_path }}/resources/users_info.yml)
+            gh_user=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i - )
             if ! [[ $gh_user == "null" ]]; then
-              gh_user_name=$(yq .users.$i.name  ${{ github.action_path }}/resources/users_info.yml)
-              gh_user_email=$(yq .users.$i.email  ${{ github.action_path }}/resources/users_info.yml)
-              echo "user: $gh_user_name"
-              echo "email: $gh_user_email"
+              gh_user_name=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i.name - )
+              gh_user_email=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i.email - )
               git interpret-trailers --trailer "approve: $gh_user_name <$gh_user_email>" --in-place $pr_patch
             else
               echo "user not found in users info resource file... exiting... "
@@ -183,12 +179,10 @@ runs:
         git checkout ${{ github.event.pull_request.head.ref }}
         git status
         echo "Setting up user"
-        gh_user=$(yq .users.$pr_user  ${{ github.action_path }}/resources/users_info.yml)
+        gh_user=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$pr_user - )
         if ! [[ $gh_user == "null" ]]; then
-          gh_user_name=$(yq .users.$pr_user.name  ${{ github.action_path }}/resources/users_info.yml)
-          gh_user_email=$(yq .users.$pr_user.email  ${{ github.action_path }}/resources/users_info.yml)
-          echo "user: $gh_user_name"
-          echo "email: $gh_user_email"
+          gh_user_name=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$pr_user.name - )
+          gh_user_email=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$pr_user.email - )
           #git interpret-trailers --trailer "approve: $gh_user_name $gh_user_email" --in-place $pr_patch
         else
           echo "user not found in users info resource file... exiting... "

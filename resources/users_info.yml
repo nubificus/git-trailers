@@ -2,12 +2,6 @@ users:
   ananos:
     name: Anastassios Nanos
     email: ananos@nubificus.co.uk
-  gkoletsos:
-    name: George Koletsos
-    email: koletsos.georgios@gmail.com
-  cmainas:
-    name: Charalampos Mainas
-    email: cmainas@nubificus.co.uk
-  nanosnetorg:
-    name: Anastassios Nanos 2
-    email: nanosnetworks@gmail.com
+  githubusername:
+    name: Person's name
+    email: Person's email
