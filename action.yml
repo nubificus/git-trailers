@@ -121,7 +121,7 @@ runs:
         for pr_patch in `echo $PR_PATCHES_GHENV`; do \
           echo "trail pr for patch number: " $pr_patch 
           for i in `echo $PR_REVIEWERS_GHENV`; do \
-            if [[ "$gh_user" == "$pr_user" ]]; then
+            if [[ "$i" == "$pr_user" ]]; then
               continue
             fi
             echo "Author was $pr_user"
