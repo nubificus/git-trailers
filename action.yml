@@ -93,7 +93,7 @@ runs:
          } >> "$GITHUB_ENV"
          echo $PR_COMMITS_GHENV
 
-         pr_reviews=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews' \
+         pr_reviews=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews?per_page=300' \
          --header 'Accept: application/vnd.github+json' \
          --header 'Authorization: Bearer ${{ github.token }}' \
          --header 'X-GitHub-Api-Version: 2022-11-28')
