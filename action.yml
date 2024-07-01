@@ -135,13 +135,16 @@ runs:
             if ! [[ $gh_user == "null" ]]; then
               gh_user_name=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i.name - )
               gh_user_email=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i.email - )
-              git interpret-trailers --trailer "review: $gh_user_name <$gh_user_email>" --in-place $pr_patch
+              git interpret-trailers \
+                --trailer "review: $gh_user_name <$gh_user_email>" \
+                --in-place \
+                $pr_patch
             else
               echo "user not found in users info resource file... exiting... "
               exit 1
             fi
           done
-        done        
+        done
 
     - name: add APPROVERS trailers
       shell: bash
@@ -155,14 +158,21 @@ runs:
             if ! [[ $gh_user == "null" ]]; then
               gh_user_name=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i.name - )
               gh_user_email=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i.email - )
-              git interpret-trailers --trailer "approve: $gh_user_name <$gh_user_email>" --in-place $pr_patch
+              git interpret-trailers \
+                --trailer "approve: $gh_user_name <$gh_user_email>" \
+                --in-place \
+                $pr_patch
             else
               echo "user not found in users info resource file... exiting... "
               exit 1
             fi
           done
-          git interpret-trailers --trailer 'PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}' --in-place $pr_patch
-        done    
+          git interpret-trailers \
+            --where start \
+            --trailer 'PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}' \
+            --in-place \
+            $pr_patch
+        done
 
     - name: update remote branch with trailer info
       shell: bash
