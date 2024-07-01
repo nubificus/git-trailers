@@ -124,6 +124,10 @@ runs:
             if [[ "$i" == "$pr_user" ]]; then
               continue
             fi
+            # skip github actionsbot as a reviewer
+            if [[ "$i" == "github-actionsbot" ]]; then
+              continue
+            fi
             echo "Author was $pr_user"
             echo "reviewers item: $i"
             gh_user=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$i - )
