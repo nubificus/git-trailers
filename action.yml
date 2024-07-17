@@ -59,12 +59,15 @@ runs:
 
     - name: Get patches
       run: |
+        git fetch origin ${{ github.event.pull_request.head.ref }}
+        git checkout ${{ github.event.pull_request.head.ref }}
         pr_patches=$(git format-patch origin/${{env.target_branch}}) 
         {
         echo 'PR_PATCHES_GHENV<<EOF'
         echo $pr_patches
         echo EOF
         } >> "$GITHUB_ENV"
+        git checkout -
         git reset --hard origin/${{env.target_branch}} && \
         git config trailer.sign.key "Signed-off-by" && git config trailer.review.key "Reviewed-by" && git config trailer.approve.key "Approved-by" && git config trailer.pr.key "PR"
       shell: bash
@@ -181,6 +184,7 @@ runs:
         git branch -D ${{ github.event.pull_request.head.ref }} || true
         git branch ${{ github.event.pull_request.head.ref }}
         git checkout ${{ github.event.pull_request.head.ref }}
+        git stash --include-untracked -- ":^*.patch"
         git status
         echo "Setting up user"
         gh_user=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$pr_user - )
@@ -201,4 +205,5 @@ runs:
         done
         echo "push to origin/branch..." ${{ github.event.pull_request.head.ref }}
         git push -f origin ${{ github.event.pull_request.head.ref }}
+        git stash pop || echo
 
