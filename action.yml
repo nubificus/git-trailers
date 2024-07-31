@@ -36,7 +36,6 @@ runs:
       if: inputs.user_info == ''
       run: |
         echo "USERINFO=$(cat ${{ github.action_path }}/resources/users_info.yml | base64 -w 0)" >> $GITHUB_ENV
-        
 
     - name: 'Setup yq'
       uses: dcarbone/install-yq-action@v1.1.1
@@ -52,10 +51,8 @@ runs:
         --header 'Authorization: Bearer ${{ github.token }}' \
         --header 'X-GitHub-Api-Version: 2022-11-28')
         echo "repo_branches: $(echo $repo_branches)"
-        repo_master=$(echo $repo_branches| jq -re '.[].name|select(.=="master")' || true)
-        target_branch=$([[ `echo $repo_master` == "master" ]] && echo master || echo main)
-        echo "target_branch=$target_branch" >> $GITHUB_ENV 
-        echo "target_branch: " $target_branch
+        echo "target_branch=${{ github.event.pull_request.base.ref }}" >> $GITHUB_ENV
+        echo "target_branch: ${{ github.event.pull_request.base.ref }}"
 
     - name: Get patches
       run: |
