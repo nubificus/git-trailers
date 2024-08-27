@@ -185,6 +185,7 @@ runs:
         git status
         echo "Setting up user"
         gh_user=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$pr_user - )
+        echo "user: $gh_user"
         if ! [[ $gh_user == "null" ]]; then
           gh_user_name=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$pr_user.name - )
           gh_user_email=$(echo ${{ env.USERINFO }} | base64 -d | yq .users.$pr_user.email - )
@@ -193,8 +194,8 @@ runs:
           echo "user not found in users info resource file... exiting... "
           exit 1
         fi       
-        git config user.email $gh_user_name
-        git config user.name $gh_user_email
+        git config user.email $gh_user_email
+        git config user.name $gh_user_name
         echo "applying patches..."
         for pr_patch in `echo $PR_PATCHES_GHENV`; do \
           echo "apply for patch number: " $pr_patch && \
