@@ -1,0 +1,44 @@
+name: Validate action code
+
+on: push
+
+jobs:
+  linter-typos:
+    name: Spell Check Repo
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Spell check
+        uses: crate-ci/typos@master
+        with:
+          config: .github/linters/typos.toml
+
+  linter-super-linter:
+    name: Lint Python/Shell/Dockerfiles/GHActions/Markdown/YAML/JS
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+      statuses: write
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run super-linter
+        uses: super-linter/super-linter@v8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ENABLE_GITHUB_ACTIONS_STEP_SUMMARY: false
+          VALIDATE_ALL_CODEBASE: true
+          VALIDATE_PYTHON_RUFF: true
+          VALIDATE_BASH: true
+          VALIDATE_SHELL_SHFMT: true
+          VALIDATE_DOCKERFILE_HADOLINT: true
+          VALIDATE_GITHUB_ACTIONS: true
+          VALIDATE_MARKDOWN: true
+          VALIDATE_YAML: true
+          VALIDATE_JAVASCRIPT_ES: true
