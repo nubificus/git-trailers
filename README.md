@@ -1,14 +1,16 @@
-This action parses the PR branch and PR info and adds git trailers
-to persist PR metadata history in the commit messages.
+# git-trailers
 
-Example usage:
+This action parses information for a pull request and adds git trailers to
+persist PR metadata history in the commit messages.
 
-Create a workflow file for an action to be triggered on PR approval.
+## Example usage
+
+Create a workflow to run the action on PR approval.
 
 eg:
-`.github/workflows/pr-approve.yml`:
+`.github/workflows/pr-approval.yml`:
 
-```
+```yaml
 name: Add Git trailers for PRs
 
 on:
@@ -17,24 +19,15 @@ on:
 
 jobs:
   git-trailers:
-    runs-on: [self-hosted]
     if: github.event.review.state == 'approved'
-
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - name: Cleanup previous jobs
-        run: |
-          echo "Cleaning up previous runs"
-          sudo rm -rf ${{ github.workspace }}/*
-          sudo rm -rf ${{ github.workspace }}/.??*
-
-      - name: Checkout Repository
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-
-      - name: Do git-trailers
-        uses: nubificus/git-trailers@v1
+      - name: Add git trailers
+        uses: nubificus/git-trailers@feat_gh_checkout_rebase
 ```
 
-Upon approval, the action would overwrite current commits against `main` (or `master`)
-adding trailers for reviewers, approvers and the PR#.
+Upon approval, the action will edit the PR commit messages adding trailers for
+the PR number, reviewers and approvers and update the PR (by force-pushing the
+final branch).
