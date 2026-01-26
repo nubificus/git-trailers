@@ -1,186 +1,297 @@
-# action.yml
-
-name: git-trailers
-description: "Action that adds Reviewed-by/Approved-by and PR trailers in git commits of a PR"
+name: 'Add PR git trailers'
+description: 'Add PR, Reviewed-by and Approved-by trailers in git commits of a PR'
 
 inputs:
-  user_info: 
-    description: "Filepath to .yaml file with user info (github username, name, email)"
+  pr-number:
+    description: >
+      Number identifying the pull request to process. Defaults to the current
+      pull request number when used from a pull request event context.
     required: false
+  user-info:
+    description: >
+      Filepath to .yaml file with user info (GitHub username, name, email)
+    required: false
+  token:
+    description: >
+      Access token used to fetch the repository and perform gh operations
+    default: ${{ github.token }}
+  check-only:
+    description: 'Whether to only check if the required trailers exist'
+    default: false
+  fail-on-missing:
+    description: 'Whether to fail if the required trailers are missing'
+    default: false
 
+outputs:
+  has-trailers:
+    description: 'Whether the specified PR has the required trailers or not'
+    value: >-
+      ${{ steps.update-commits.outputs.has-trailers ||
+        steps.check-trailers.outputs.has-trailers }}
 
 runs:
-    using: 'composite'
-    steps:
-#    - name: Debug github events
-#      id: tmp
-#      shell: bash
-#      run: |
-#        echo "github.head_ref:" ${{ github.head_ref}}
-#        echo "github.ref:" ${{ github.ref }}
-#        echo "github.ref_name:" ${{ github.ref_name }}
-#        echo "github.event.number:" ${{ github.event.number }}
-#        echo "github.event.pull_request.base.ref:" ${{ github.event.pull_request.base.ref }}
-#        echo "github.event.pull_request.head.ref:" ${{ github.event.pull_request.head.ref }}
-#        echo "github.event.pull_request.number:" ${{ github.event.pull_request.number }}
+  using: 'composite'
+  steps:
+  - name: Get PR info
+    id: get-pr-info
+    env:
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number }}
+      GH_TOKEN: ${{ inputs.token }}
+    run: |
+      pr_info=$(gh pr view "${PR_NUMBER}" \
+        --repo "${REPO}" \
+        --json author,headRefName,baseRefName,url,commits)
 
-    - name: 'Setup yq'
-      uses: dcarbone/install-yq-action@v1.1.1
-      with:
-        version: v4.40.5
+      author=$(jq -r '.author.login' <<< "$pr_info" |
+        sed 's/\[bot\]//g' | sed 's/app\///g')
+      head_ref=$(jq -r '.headRefName' <<< "$pr_info")
+      base_ref=$(jq -r '.baseRefName' <<< "$pr_info")
+      url=$(jq -r '.url' <<< "$pr_info")
+      commits=$(jq -r '.commits[].oid' <<< "$pr_info")
 
-    - name: Parse inputs
-      shell: bash
-      run: |
-        if [ -n "${{ inputs.user_info }}" ]; then
-          USER_INFO=$(cat "${{ inputs.user_info }}" | base64 -w 0)
-        else
-          USER_INFO=$(cat "${{ github.action_path }}"/resources/users_info.yml | base64 -w 0)
+      pr_reviews=$(gh api \
+        "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
+        --paginate)
+
+      reviewers=$(jq -r '[.[].user.login] | unique | .[]' <<< "$pr_reviews" |
+        sed 's/\[bot\]//g')
+      approvers=$(jq -r '
+        [map(select(.state == "APPROVED"))[].user.login] | unique | .[]
+      ' <<< "$pr_reviews" | sed 's/\[bot\]//g')
+
+      {
+        echo "author=${author}"
+        echo "head-ref=${head_ref}"
+        echo "base-ref=${base_ref}"
+        echo "url=${url}"
+        echo 'commits<<EOF'
+        echo "$commits"
+        echo 'EOF'
+        echo 'reviewers<<EOF'
+        echo "$reviewers"
+        echo 'EOF'
+        echo 'approvers<<EOF'
+        echo "$approvers"
+        echo 'EOF'
+        echo "checkout-path=.add-git-trailers-pr-${PR_NUMBER}"
+      } >> "$GITHUB_OUTPUT"
+
+      echo "PR: ${PR_NUMBER}"
+      echo "URL: ${url}"
+      echo "Author: ${author}"
+      echo "Head ref: ${head_ref}"
+      echo "Base ref: ${base_ref}"
+      printf 'Commits:\n%s\n' "${commits}"
+      printf 'Reviewers:\n%s\n' "${reviewers}"
+      printf 'Approvers:\n%s\n' "${approvers}"
+    shell: bash
+
+  - name: Set user-info file
+    id: set-file
+    if: inputs.check-only == 'false'
+    env:
+      USER_INFO: ${{ inputs.user-info }}
+    run: |
+      TEMP_USER_INFO="${RUNNER_TEMP}/user_info.yml"
+      if [[ -n "$USER_INFO" ]]; then
+        echo "Using ${USER_INFO} for user info"
+        cp "$USER_INFO" "$TEMP_USER_INFO"
+      else
+        echo "Using default file for user info"
+        cp "${GITHUB_ACTION_PATH}/resources/user_info.yml" \
+          "$TEMP_USER_INFO"
+      fi
+      echo "user-info-path=${TEMP_USER_INFO}" >> "$GITHUB_OUTPUT"
+    shell: bash
+
+  - name: Checkout head ref
+    uses: actions/checkout@v6
+    with:
+      ref: ${{ steps.get-pr-info.outputs.head-ref }}
+      fetch-depth: 0
+      path: ${{ steps.get-pr-info.outputs.checkout-path }}
+      token: ${{ inputs.token }}
+
+  - name: Check trailers
+    id: check-trailers
+    working-directory: ${{ steps.get-pr-info.outputs.checkout-path }}
+    env:
+      COMMITS: ${{ steps.get-pr-info.outputs.commits }}
+      FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
+    run: |
+      required=(
+        "PR"
+        "Reviewed-by"
+        "Approved-by"
+      )
+
+      has_trailers=true
+      for sha in $COMMITS; do
+        msg=$(git show -s --format=%B "$sha")
+        trailers=$(echo "$msg" | git interpret-trailers --no-divider --parse)
+
+        for r in "${required[@]}"; do
+          if ! echo "$trailers" | grep -Eiq "^${r}:[[:space:]]+.+$"; then
+            echo "Commit ${sha} missing required trailer: ${r}"
+            has_trailers=false
+          fi
+        done
+      done
+      echo "has-trailers=${has_trailers}" >> "$GITHUB_OUTPUT"
+      echo "PR has required trailers: ${has_trailers}"
+
+      if [[ "$FAIL_ON_MISSING" == 'true' ]] &&
+        [[ "$has_trailers" == 'false' ]]; then
+        echo "::error::Required trailers missing"
+        exit 1
+      fi
+    shell: bash
+
+  - name: Setup yq
+    if: >-
+      inputs.check-only == 'false' &&
+      steps.check-trailers.outputs.has-trailers == 'false'
+    uses: dcarbone/install-yq-action@v1
+    with:
+      version: 'v4.52.2'
+
+  - name: Generate Reviewed-by trailer strings
+    id: generate-reviewer-trailers
+    if: >-
+      inputs.check-only == 'false' &&
+      steps.check-trailers.outputs.has-trailers == 'false'
+    env:
+      PR_AUTHOR: ${{ steps.get-pr-info.outputs.author }}
+      PR_REVIEWERS: ${{ steps.get-pr-info.outputs.reviewers }}
+      USER_INFO_PATH: ${{ steps.set-file.outputs.user-info-path }}
+    run: |
+      trailers=()
+      for i in $PR_REVIEWERS; do \
+        case "$i" in
+          # Skip PR author and github-actions bot
+          "$PR_AUTHOR"|"github-actions") continue ;;
+          *) ;;
+        esac
+
+        gh_user=$(key="$i" yq '.users.[strenv(key)]' "$USER_INFO_PATH")
+        if [[ "$gh_user" == "null" ]]; then
+          gh_user=$(name="${i}[bot]" \
+            yq '.users.* | select(.name == strenv(name))' "$USER_INFO_PATH")
         fi
-        echo "user_info=$USER_INFO" >> $GITHUB_ENV
 
-    - name: Get repo branches
-      shell: bash
-      run: |
-        repo_branches=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/branches' \
-        --header 'Accept: application/vnd.github+json' \
-        --header 'Authorization: Bearer ${{ github.token }}' \
-        --header 'X-GitHub-Api-Version: 2022-11-28')
-        echo "repo_branches: $(echo $repo_branches)"
-        echo "target_branch=${{ github.event.pull_request.base.ref }}" >> $GITHUB_ENV
-        echo "target_branch: ${{ github.event.pull_request.base.ref }}"
-
-    - name: Get PR info
-      shell: bash
-      run: |
-         pr_info=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}' \
-         --header 'Accept: application/vnd.github+json' \
-         --header 'Authorization: Bearer ${{ github.token }}' \
-         --header 'X-GitHub-Api-Version: 2022-11-28')
-         pr_user=$(echo $pr_info | jq -e .user.login | sed 's/\[//g' | sed 's/\]//g' | sed 's/\,//g' | sed 's/\"//g')
-         echo "pr_user=$pr_user" >> $GITHUB_ENV
-         echo "pull request user: " $pr_user
-
-         pr_commits_full=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/commits' \
-         --header 'Accept: application/vnd.github+json' \
-         --header 'Authorization: Bearer ${{ github.token }}' \
-         --header 'X-GitHub-Api-Version: 2022-11-28')
-         pr_commits=$(echo $pr_commits_full | jq -re '.[].sha')
-         {
-         echo 'PR_COMMITS_GHENV<<EOF'
-         echo $pr_commits
-         echo EOF
-         } >> "$GITHUB_ENV"
-         echo $PR_COMMITS_GHENV
-
-         pr_reviews=$(curl --location 'https://api.github.com/repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews?per_page=300' \
-         --header 'Accept: application/vnd.github+json' \
-         --header 'Authorization: Bearer ${{ github.token }}' \
-         --header 'X-GitHub-Api-Version: 2022-11-28')
-         pr_reviewers=$(echo $pr_reviews | jq 'map(.user.login) | unique' | sed 's/\[//g' | sed 's/\]//g' | sed 's/\,//g' | sed 's/\"//g')
-         echo "pull reviewers: " $pr_reviewers
-         {
-         echo 'PR_REVIEWERS_GHENV<<EOF'
-         echo $pr_reviewers
-         echo EOF
-         } >> "$GITHUB_ENV"
-         echo $PR_REVIEWERS_GHENV
-         pr_approver=$(echo $pr_reviews | jq  -rce 'map(select(.state == "APPROVED"))' | jq 'map(.user.login) | unique' |sed 's/\[//g' | sed 's/\]//g' | sed 's/\,//g' | sed 's/\"//g')
-         echo "pull request approver: " $pr_approver
-         {
-         echo 'PR_APPROVER_GHENV<<EOF'
-         echo $pr_approver
-         echo EOF
-         } >> "$GITHUB_ENV"
-         echo $PR_APPROVER_GHENV
-
-    - name: Generate REVIEWER trailer strings
-      shell: bash
-      run: |
-        trailers=()
-        for i in $(echo $PR_REVIEWERS_GHENV); do \
-          if [[ "$i" == "$pr_user" ]]; then
-            continue
-          fi
-          # skip github actionsbot as a reviewer
-          if [[ "$i" == "github-actionsbot" ]]; then
-            continue
-          fi
-          echo "Author was $pr_user"
-          echo "reviewers item: $i"
-          gh_user=$(echo ${{ env.user_info }} | base64 -d | yq .users.$i - )
-          echo "user: $gh_user"
-          if ! [[ $gh_user == "null" ]]; then
-            gh_user_name=$(echo ${{ env.user_info }} | base64 -d | yq .users.$i.name - )
-            gh_user_email=$(echo ${{ env.user_info }} | base64 -d | yq .users.$i.email - )
-            trailers+=("review: $gh_user_name <$gh_user_email>")
-          else
-            echo "user not found in users info resource file... exiting... "
-            exit 1
-          fi
-        done
-        trailers_json=$(jq -c -n '$ARGS.positional' --args "${trailers[@]}")
-        echo "reviewer_trailers=$trailers_json" >> $GITHUB_ENV
-        echo "reviewer_trailers=$trailers_json"
-
-
-    - name: Generate APPROVER trailer strings
-      shell: bash
-      run: |
-        trailers=()
-        for i in `echo $PR_APPROVER_GHENV`; do \
-          echo "approver item: " $i
-          gh_user=$(echo ${{ env.user_info }} | base64 -d | yq .users.$i - )
-          if ! [[ $gh_user == "null" ]]; then
-            gh_user_name=$(echo ${{ env.user_info }} | base64 -d | yq .users.$i.name - )
-            gh_user_email=$(echo ${{ env.user_info }} | base64 -d | yq .users.$i.email - )
-            trailers+=("approve: $gh_user_name <$gh_user_email>")
-          else
-            echo "user not found in users info resource file... exiting... "
-            exit 1
-          fi
-        done
-        trailers_json=$(jq -c -n '$ARGS.positional' --args "${trailers[@]}")
-        echo "approver_trailers=$trailers_json" >> $GITHUB_ENV
-        echo "approver_trailers=$trailers_json"
-
-    - name: Update remote branch with trailer info
-      shell: bash
-      run: |
-        echo "Preparing git environment"
-        git fetch origin ${{ github.event.pull_request.head.ref }}
-        git checkout ${{ github.event.pull_request.head.ref }}
-        git clean -fd
-        git status
-        git config trailer.sign.key "Signed-off-by"
-        git config trailer.review.key "Reviewed-by"
-        git config trailer.approve.key "Approved-by"
-        git config trailer.pr.key "PR"
-        git config trailer.pr.where "start"
-        echo "Setting up user"
-        gh_user=$(echo ${{ env.user_info }} | base64 -d | yq .users.$pr_user - )
-        echo "user: $gh_user"
-        if ! [[ $gh_user == "null" ]]; then
-          gh_user_name=$(echo ${{ env.user_info }} | base64 -d | yq .users.$pr_user.name - )
-          gh_user_email=$(echo ${{ env.user_info }} | base64 -d | yq .users.$pr_user.email - )
-        else
-          echo "user not found in users info resource file... exiting... "
+        if [[ -z "$gh_user" ]] || [[ "$gh_user" == "null" ]]; then
+          echo "::error::Reviewer '${i}' not found in user-info file"
           exit 1
-        fi       
-        git config user.email $gh_user_email
-        git config user.name $gh_user_name
-        pr_trailer="[\"pr: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}\"]"
-        trailer_args="--trailer \"pr: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number }}\""
-        trailers_json=$(echo -e "$reviewer_trailers\n$approver_trailers" | jq -s 'add')
-        trailers=$(echo "$trailers_json" | jq -c -r '.[]')
-        IFS=$'\n'
-        for i in $trailers; do
-          [ -n "$i" ] && trailer_args+=" --trailer \"$i\""
-        done;
-        unset IFS
-        echo "Adding trailers"
-        git rebase origin/${{ env.target_branch }} \
-          -x "git commit --amend --allow-empty --no-edit $trailer_args"
-        echo "Pushing to origin/branch" ${{ github.event.pull_request.head.ref }}
-        git push -f origin ${{ github.event.pull_request.head.ref }}
+        fi
 
+        gh_user_name=$(yq '.name' <<< "$gh_user")
+        gh_user_email=$(yq '.email' <<< "$gh_user")
+        trailers+=("review: ${gh_user_name} <${gh_user_email}>")
+        echo "Reviewer '$i' is '${gh_user_name} <${gh_user_email}>'"
+      done
+
+      trailers_json=$(jq -nc '$ARGS.positional' --args "${trailers[@]}")
+      echo "reviewer-trailers=${trailers_json}" >> "$GITHUB_OUTPUT"
+      echo "Reviewer trailers: ${trailers_json}"
+    shell: bash
+
+  - name: Generate Approved-by trailer strings
+    id: generate-approver-trailers
+    if: >-
+      inputs.check-only == 'false' &&
+      steps.check-trailers.outputs.has-trailers == 'false'
+    env:
+      PR_AUTHOR: ${{ steps.get-pr-info.outputs.author }}
+      PR_APPROVERS: ${{ steps.get-pr-info.outputs.approvers }}
+      USER_INFO_PATH: ${{ steps.set-file.outputs.user-info-path }}
+    run: |
+      trailers=()
+      for i in $PR_APPROVERS; do \
+        gh_user=$(key="$i" yq '.users.[strenv(key)]' "$USER_INFO_PATH")
+        if [[ "$gh_user" == "null" ]]; then
+          gh_user=$(name="${i}[bot]" \
+            yq '.users.* | select(.name == strenv(name))' "$USER_INFO_PATH")
+        fi
+
+        if [[ -z "$gh_user" ]] || [[ "$gh_user" == "null" ]]; then
+          echo "::error::Approver '${i}' not found in user-info file"
+          exit 1
+        fi
+
+        gh_user_name=$(yq '.name' <<< "$gh_user")
+        gh_user_email=$(yq '.email' <<< "$gh_user")
+        trailers+=("approve: ${gh_user_name} <${gh_user_email}>")
+        echo "Approver '$i' is '${gh_user_name} <${gh_user_email}>'"
+      done
+
+      trailers_json=$(jq -nc '$ARGS.positional' --args "${trailers[@]}")
+      echo "approver-trailers=${trailers_json}" >> "$GITHUB_OUTPUT"
+      echo "Approver trailers: ${trailers_json}"
+    shell: bash
+
+  - name: Update PR commits with trailers
+    id: update-commits
+    if: >-
+      inputs.check-only == 'false' &&
+      steps.check-trailers.outputs.has-trailers == 'false'
+    working-directory: ${{ steps.get-pr-info.outputs.checkout-path }}
+    env:
+      PR_URL: ${{ steps.get-pr-info.outputs.url }}
+      PR_AUTHOR: ${{ steps.get-pr-info.outputs.author }}
+      USER_INFO_PATH: ${{ steps.set-file.outputs.user-info-path }}
+      BASE_REF: ${{ steps.get-pr-info.outputs.base-ref }}
+      HEAD_REF: ${{ steps.get-pr-info.outputs.head-ref }}
+      REVIEWER_TRAILERS: >-
+        ${{ steps.generate-reviewer-trailers.outputs.reviewer-trailers }}
+      APPROVER_TRAILERS: >-
+        ${{ steps.generate-approver-trailers.outputs.approver-trailers }}
+    run: |
+      echo 'Preparing git environment'
+      git config trailer.sign.key "Signed-off-by"
+      git config trailer.review.key "Reviewed-by"
+      git config trailer.approve.key "Approved-by"
+      git config trailer.pr.key "PR"
+      git config trailer.pr.where "start"
+
+      gh_user=$(key="$PR_AUTHOR" yq '.users.[strenv(key)]' "$USER_INFO_PATH")
+      if [[ "$gh_user" == "null" ]]; then
+        gh_user=$(name="${PR_AUTHOR}[bot]" \
+          yq '.users.* | select(.name == strenv(name))' "$USER_INFO_PATH")
+      fi
+
+      if [[ -z "$gh_user" ]] || [[ "$gh_user" == "null" ]]; then
+        echo "::error::PR author '${PR_AUTHOR}' not found in user-info file"
+        exit 1
+      fi
+
+      gh_user_name=$(yq '.name' <<< "$gh_user")
+      gh_user_email=$(yq '.email' <<< "$gh_user")
+      git config user.email "$gh_user_email"
+      git config user.name "$gh_user_name"
+      echo "Configured '${gh_user_name} <${gh_user_email}>' as committer"
+
+      echo 'Generating actual trailers'
+      trailer_args=$(jq -rn \
+        --arg pr "$PR_URL" \
+        --argjson r "$REVIEWER_TRAILERS" \
+        --argjson a "$APPROVER_TRAILERS" \
+        '["pr: \($pr)"] + $r + $a | map("--trailer " + @sh) | join(" ")')
+
+      echo 'Adding trailers'
+      git rebase "origin/${BASE_REF}" \
+        -x "git commit --amend --allow-empty --no-edit ${trailer_args}"
+
+      echo "Pushing to origin/${HEAD_REF}"
+      git push --force-with-lease origin "${HEAD_REF}"
+
+      echo 'has-trailers=true' >> "$GITHUB_OUTPUT"
+      echo 'Successfully added trailers'
+    shell: bash
+
+  - name: Cleanup
+    if: always()
+    env:
+      CHECKOUT_PATH: ${{ steps.get-pr-info.outputs.checkout-path }}
+    run: rm -rf "$CHECKOUT_PATH"
+    shell: bash
