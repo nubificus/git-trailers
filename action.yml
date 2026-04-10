@@ -198,6 +198,11 @@ runs:
         echo "Reviewer '$i' is '${gh_user_name} <${gh_user_email}>'"
       done
 
+      if [[ ${#trailers[@]} -eq 0 ]]; then
+        echo "::error::No reviewer trailers generated"
+        exit 1
+      fi
+
       trailers_json=$(jq -nc '$ARGS.positional' --args "${trailers[@]}")
       echo "reviewer-trailers=${trailers_json}" >> "$GITHUB_OUTPUT"
       echo "Reviewer trailers: ${trailers_json}"
@@ -215,6 +220,12 @@ runs:
     run: |
       trailers=()
       for i in $PR_APPROVERS; do \
+        # Skip PR author
+        if [[ "$i" == "$PR_AUTHOR" ]]; then
+          echo "Skipping approver '${i}' (PR author)"
+          continue
+        fi
+
         gh_user=$(key="$i" yq '.users.[strenv(key)]' "$USER_INFO_PATH")
         if [[ "$gh_user" == "null" ]]; then
           gh_user=$(name="${i}[bot]" \
@@ -231,6 +242,11 @@ runs:
         trailers+=("approve: ${gh_user_name} <${gh_user_email}>")
         echo "Approver '$i' is '${gh_user_name} <${gh_user_email}>'"
       done
+
+      if [[ ${#trailers[@]} -eq 0 ]]; then
+        echo "::error::No approver trailers generated"
+        exit 1
+      fi
 
       trailers_json=$(jq -nc '$ARGS.positional' --args "${trailers[@]}")
       echo "approver-trailers=${trailers_json}" >> "$GITHUB_OUTPUT"
