@@ -21,6 +21,10 @@ inputs:
   fail-on-missing:
     description: 'Whether to fail if the required trailers are missing'
     default: false
+  exclude-reviewers:
+    description: >
+      Comma-separated list of GitHub logins to exclude from reviewer trailers
+    default: 'github-actions,github-advanced-security'
 
 outputs:
   has-trailers:
@@ -165,14 +169,17 @@ runs:
       PR_AUTHOR: ${{ steps.get-pr-info.outputs.author }}
       PR_REVIEWERS: ${{ steps.get-pr-info.outputs.reviewers }}
       USER_INFO_PATH: ${{ steps.set-file.outputs.user-info-path }}
+      EXCLUDE_REVIEWERS: ${{ inputs.exclude-reviewers }}
     run: |
+      excluded=$(tr ',' '\n' <<< "$EXCLUDE_REVIEWERS" | sed 's/\[bot\]//g' |
+        sed '/^$/d')
       trailers=()
       for i in $PR_REVIEWERS; do \
-        case "$i" in
-          # Skip PR author and github-actions bot
-          "$PR_AUTHOR"|"github-actions") continue ;;
-          *) ;;
-        esac
+        # Skip PR author and specified reviewers
+        if [[ "$i" == "$PR_AUTHOR" ]] || grep -qx "$i" <<< "$excluded"; then
+          echo "Skipping reviewer '${i}'"
+          continue
+        fi
 
         gh_user=$(key="$i" yq '.users.[strenv(key)]' "$USER_INFO_PATH")
         if [[ "$gh_user" == "null" ]]; then
