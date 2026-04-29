@@ -126,6 +126,16 @@ runs:
           approver_trailers+=("approve: ${name} <${email}>")
         done
 
+        # Fail if no reviewers or approvers
+        if [[ ${#reviewer_trailers[@]} -eq 0 ]]; then
+          echo "ERROR: No reviewers found for this PR"
+          exit 1
+        fi
+        if [[ ${#approver_trailers[@]} -eq 0 ]]; then
+          echo "ERROR: No approvers found for this PR"
+          exit 1
+        fi
+
         # Export as JSON arrays
         reviewer_json=$(jq -c -n '$ARGS.positional' --args "${reviewer_trailers[@]+"${reviewer_trailers[@]}"}")
         approver_json=$(jq -c -n '$ARGS.positional' --args "${approver_trailers[@]+"${approver_trailers[@]}"}")
