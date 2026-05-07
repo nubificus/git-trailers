@@ -192,5 +192,5 @@ runs:
         echo "exec_cmd: $exec_cmd"
         git rebase origin/main -x "$exec_cmd"
 
-        echo "Pushing to origin/${PR_NUMBER}"
-        git push -f origin "${PR_NUMBER}"
+        echo "Pushing to origin/${BRANCH_TO_REBASE}"
+        git push -f origin "${BRANCH_TO_REBASE}"
