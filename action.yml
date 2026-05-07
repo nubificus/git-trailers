@@ -6,6 +6,10 @@ inputs:
     description: "Filepath to .yaml file with user info (github username, name, email)"
     required: false
 
+  rebase_branch:
+    description: "The branch to rebase against"
+    required: false
+
 runs:
     using: 'composite'
     steps:
@@ -154,7 +158,6 @@ runs:
 
         echo "Preparing git environment"
         git fetch origin "${{ env.target_branch }}"
-        git checkout "${{ env.target_branch }}"
         git status
         git config trailer.sign.key "Signed-off-by"
         git config trailer.review.key "Reviewed-by"
