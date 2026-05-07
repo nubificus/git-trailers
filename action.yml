@@ -153,7 +153,7 @@ runs:
       env:
         REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
-        BRANCH_TO_REBASE: ${{ github.event.pull_request.head.ref }}
+        BRANCH_TO_REBASE: ${{ inputs.rebase_branch }}
       run: |
         set -euo pipefail
 
