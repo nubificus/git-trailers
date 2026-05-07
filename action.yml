@@ -25,6 +25,9 @@ inputs:
     description: >
       Comma-separated list of GitHub logins to exclude from reviewer trailers
     default: 'github-actions,github-advanced-security'
+  rebase-branch:
+    description: "The branch to rebase against"
+    required: true
 
 outputs:
   has-trailers:
@@ -49,9 +52,6 @@ runs:
 
       author=$(jq -r '.author.login' <<< "$pr_info" |
         sed 's/\[bot\]//g' | sed 's/app\///g')
-      head_ref=$(jq -r '.headRefName' <<< "$pr_info")
-      head_sha=$(jq -r '.headRefOid' <<< "$pr_info")
-      base_ref=$(jq -r '.baseRefName' <<< "$pr_info")
       url=$(jq -r '.url' <<< "$pr_info")
       commits=$(jq -r '.commits[].oid' <<< "$pr_info")
 
@@ -67,9 +67,6 @@ runs:
 
       {
         echo "author=${author}"
-        echo "head-sha=${head_sha}"
-        echo "head-ref=${head_ref}"
-        echo "base-ref=${base_ref}"
         echo "url=${url}"
         echo 'commits<<EOF'
         echo "$commits"
@@ -80,7 +77,6 @@ runs:
         echo 'approvers<<EOF'
         echo "$approvers"
         echo 'EOF'
-        echo "checkout-path=.add-git-trailers-pr-${PR_NUMBER}"
       } >> "$GITHUB_OUTPUT"
 
       echo "PR: ${PR_NUMBER}"
@@ -112,17 +108,8 @@ runs:
       echo "user-info-path=${TEMP_USER_INFO}" >> "$GITHUB_OUTPUT"
     shell: bash
 
-  - name: Checkout head ref
-    uses: actions/checkout@v6
-    with:
-      ref: ${{ steps.get-pr-info.outputs.head-sha }}
-      fetch-depth: 0
-      path: ${{ steps.get-pr-info.outputs.checkout-path }}
-      token: ${{ inputs.token }}
-
   - name: Check trailers
     id: check-trailers
-    working-directory: ${{ steps.get-pr-info.outputs.checkout-path }}
     env:
       COMMITS: ${{ steps.get-pr-info.outputs.commits }}
       FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
@@ -266,8 +253,7 @@ runs:
       PR_URL: ${{ steps.get-pr-info.outputs.url }}
       PR_AUTHOR: ${{ steps.get-pr-info.outputs.author }}
       USER_INFO_PATH: ${{ steps.set-file.outputs.user-info-path }}
-      BASE_REF: ${{ steps.get-pr-info.outputs.base-ref }}
-      HEAD_REF: ${{ steps.get-pr-info.outputs.head-ref }}
+      REBASED_BRANCH: ${{ inputs.rebase-branch }}
       REVIEWER_TRAILERS: >-
         ${{ steps.generate-reviewer-trailers.outputs.reviewer-trailers }}
       APPROVER_TRAILERS: >-
@@ -305,11 +291,11 @@ runs:
         '["pr: \($pr)"] + $r + $a | map("--trailer " + @sh) | join(" ")')
 
       echo 'Adding trailers'
-      git rebase "origin/${BASE_REF}" \
+      git rebase "origin/main" \
         -x "git commit --amend --allow-empty --no-edit ${trailer_args}"
 
-      echo "Pushing to origin/${HEAD_REF}"
-      git push --force-with-lease origin "HEAD:refs/heads/${HEAD_REF}"
+      echo "Pushing to origin/${REBASED_BRANCH}"
+      git push --force-with-lease origin "HEAD:refs/heads/${REBASED_BRANCH}"
 
       echo 'has-trailers=true' >> "$GITHUB_OUTPUT"
       echo 'Successfully added trailers'
