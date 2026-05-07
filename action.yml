@@ -193,4 +193,4 @@ runs:
         git rebase origin/main -x "$exec_cmd"
 
         echo "Pushing to origin/${BRANCH_TO_REBASE}"
-        git push -f origin "${BRANCH_TO_REBASE}"
+        git push -f origin "HEAD:refs/heads/$BRANCH_TO_REBASE"
