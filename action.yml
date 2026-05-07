@@ -153,6 +153,7 @@ runs:
       env:
         REPOSITORY: ${{ github.repository }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
+        BRANCH_TO_REBASE: ${{ github.event.pull_request.head.ref }}
       run: |
         set -euo pipefail
 
@@ -191,5 +192,5 @@ runs:
         echo "exec_cmd: $exec_cmd"
         git rebase origin/main -x "$exec_cmd"
 
-        echo "Pushing to origin/${{ env.target_branch }}"
-        git push -f origin "${{ env.target_branch }}"
+        echo "Pushing to origin/${PR_NUMBER}"
+        git push -f origin "${PR_NUMBER}"
