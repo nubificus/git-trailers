@@ -45,14 +45,25 @@ runs:
     run: |
       pr_info=$(gh pr view "${PR_NUMBER}" \
         --repo "${REPO}" \
-        --json author,headRefName,baseRefName,url,commits)
+        --json author,headRefName,baseRefName,url,commits,state,mergeCommit,baseRefOid,headRefOid)
 
       author=$(jq -r '.author.login' <<< "$pr_info" |
         sed 's/\[bot\]//g' | sed 's/app\///g')
       head_ref=$(jq -r '.headRefName' <<< "$pr_info")
       base_ref=$(jq -r '.baseRefName' <<< "$pr_info")
       url=$(jq -r '.url' <<< "$pr_info")
-      commits=$(jq -r '.commits[].oid' <<< "$pr_info")
+      merged=$(jq -r '.state' <<< "$pr_info")
+
+      if [[ "$merged" == "MERGED" ]]; then
+        merge_commit=$(jq -r '.mergeCommit.oid' <<< "$pr_info")
+        base_ref_oid=$(jq -r '.baseRefOid' <<< "$pr_info")
+        commits=$(gh api "repos/${REPO}/compare/${base_ref_oid}...${merge_commit}" \
+          --jq '.commits[].sha')
+        rebase_ref="$base_ref"
+      else
+        commits=$(jq -r '.commits[].oid' <<< "$pr_info")
+        rebase_ref="$head_ref"
+      fi
 
       pr_reviews=$(gh api \
         "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
@@ -68,6 +79,7 @@ runs:
         echo "author=${author}"
         echo "head-ref=${head_ref}"
         echo "base-ref=${base_ref}"
+        echo "rebase-ref=${rebase_ref}"
         echo "url=${url}"
         echo 'commits<<EOF'
         echo "$commits"
@@ -78,7 +90,6 @@ runs:
         echo 'approvers<<EOF'
         echo "$approvers"
         echo 'EOF'
-        echo "checkout-path=.add-git-trailers-pr-${PR_NUMBER}"
       } >> "$GITHUB_OUTPUT"
 
       echo "PR: ${PR_NUMBER}"
@@ -86,6 +97,7 @@ runs:
       echo "Author: ${author}"
       echo "Head ref: ${head_ref}"
       echo "Base ref: ${base_ref}"
+      echo "Rebase ref: ${rebase_ref}"
       printf 'Commits:\n%s\n' "${commits}"
       printf 'Reviewers:\n%s\n' "${reviewers}"
       printf 'Approvers:\n%s\n' "${approvers}"
@@ -109,17 +121,8 @@ runs:
       echo "user-info-path=${TEMP_USER_INFO}" >> "$GITHUB_OUTPUT"
     shell: bash
 
-  - name: Checkout head ref
-    uses: actions/checkout@v6
-    with:
-      ref: ${{ steps.get-pr-info.outputs.head-ref }}
-      fetch-depth: 0
-      path: ${{ steps.get-pr-info.outputs.checkout-path }}
-      token: ${{ inputs.token }}
-
   - name: Check trailers
     id: check-trailers
-    working-directory: ${{ steps.get-pr-info.outputs.checkout-path }}
     env:
       COMMITS: ${{ steps.get-pr-info.outputs.commits }}
       FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
@@ -264,13 +267,17 @@ runs:
       PR_AUTHOR: ${{ steps.get-pr-info.outputs.author }}
       USER_INFO_PATH: ${{ steps.set-file.outputs.user-info-path }}
       BASE_REF: ${{ steps.get-pr-info.outputs.base-ref }}
+      REBASE_REF: ${{ steps.get-pr-info.outputs.rebase-ref }}
       HEAD_REF: ${{ steps.get-pr-info.outputs.head-ref }}
+      COMMITS: ${{ steps.get-pr-info.outputs.commits }}
       REVIEWER_TRAILERS: >-
         ${{ steps.generate-reviewer-trailers.outputs.reviewer-trailers }}
       APPROVER_TRAILERS: >-
         ${{ steps.generate-approver-trailers.outputs.approver-trailers }}
     run: |
       echo 'Preparing git environment'
+      first_commit=$(echo "$COMMITS" | head -n1)
+      git branch old_base "${first_commit}~1"
       git config trailer.sign.key "Signed-off-by"
       git config trailer.review.key "Reviewed-by"
       git config trailer.approve.key "Approved-by"
@@ -302,19 +309,12 @@ runs:
         '["pr: \($pr)"] + $r + $a | map("--trailer " + @sh) | join(" ")')
 
       echo 'Adding trailers'
-      git rebase "origin/${BASE_REF}" \
+      git rebase "old_base" \
         -x "git commit --amend --allow-empty --no-edit ${trailer_args}"
 
-      echo "Pushing to origin/${HEAD_REF}"
-      git push --force-with-lease origin "${HEAD_REF}"
+      echo "Pushing to origin/${REBASE_REF}"
+      git push --force-with-lease origin "HEAD:refs/heads/${REBASE_REF}"
 
       echo 'has-trailers=true' >> "$GITHUB_OUTPUT"
       echo 'Successfully added trailers'
-    shell: bash
-
-  - name: Cleanup
-    if: always()
-    env:
-      CHECKOUT_PATH: ${{ steps.get-pr-info.outputs.checkout-path }}
-    run: rm -rf "$CHECKOUT_PATH"
     shell: bash
